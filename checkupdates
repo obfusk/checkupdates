@@ -1,0 +1,135 @@
+#!/usr/bin/python3
+# encoding: utf-8
+
+# --                                                            ; {{{1
+#
+# File        : checkupdates
+# Maintainer  : Felix C. Stegerman <flx@obfusk.net>
+# Date        : 2020-08-10
+#
+# Copyright   : Copyright (C) 2020  Felix C. Stegerman
+# Version     : v0.0.1
+# License     : GPLv3+
+#
+# --                                                            ; }}}1
+
+                                                                # {{{1
+r"""
+
+>>> latest_version("python3")
+'3.8.5'
+
+"""                                                             # }}}1
+
+import os, re, sys
+from pathlib import Path
+
+import click, requests
+
+GH_API      = "https://api.github.com"
+GH_RELEASES = GH_API + "/repos/{}/{}/releases"
+PYPI_JSON   = "https://pypi.org/pypi/{}/json"
+
+GH_RX       = r"https://github\.com/([^/]+)/([^/]+)/"
+PYPI_RX     = r"https://pypi\.python\.org/"
+
+LATEST      = dict(
+  openssl   = (True , "https://www.openssl.org/source/",
+                     r"openssl-(1[\d.]+[a-z]?).tar.gz"),
+  libpcre   = (False, "https://ftp.pcre.org/pub/pcre/",
+                     r"pcre-([\d.]+)\.zip"),
+  python3   = (True , "https://www.python.org/downloads/",
+                     r"https://www\.python\.org/ftp/python/([\d.]+)/"),
+  sqlite3   = (True , "https://www.sqlite.org/index.html",
+                     r"releaselog.*Version\s*([\d.]+)"),
+)
+LATEST["hostpython3"] = LATEST["python3"]
+
+def get(url, hdrs = {}):
+  (resp := requests.get(url, headers = hdrs)).raise_for_status()
+  return resp
+
+def gh_get(url):
+  token = os.environ.get("GITHUB_TOKEN") or None
+  hdrs  = dict(Authorization = "token " + token) if token else {}
+  return get(url, hdrs)
+
+def get_paginated(get_f, url, **kw):
+  while url:
+    resp  = get_f(url, **kw)
+    url   = resp.links.get("next", {}).get("url")
+    for x in resp.json(): yield x
+
+def version_url(p):
+  v, u = None, None
+  with p.open() as f:
+    for line in f:
+      if m := re.search(r"""version\s*=\s*['"]v?(\S+)['"]""", line): v = m[1]
+      if m := re.search(r"""url\s*=\s*['"](\S+)['"]"""    , line): u = m[1]
+  return v, u
+
+def latest_version(name, url = None):                           # {{{1
+  if name in LATEST:
+    v             = None
+    fst, url, rx  = LATEST[name]
+    for line in get(url).iter_lines():
+      if m := re.search(rx, line.decode()):
+        v = m[1]
+        if fst: break
+    return v
+  elif url:
+    if m := re.match(GH_RX, url):
+      for r in get_paginated(gh_get, GH_RELEASES.format(m[1], m[2])):
+        if not r["draft"] and not r["prerelease"]:
+          v = r["tag_name"]
+          return v[1:] if v.startswith("v") else v
+      return None
+    if m := re.match(PYPI_RX, url):
+      return get(PYPI_JSON.format(name)).json()["info"]["version"]
+  return None
+                                                                # }}}1
+
+@click.group()
+@click.option("-v", "--verbose", is_flag = True)
+@click.pass_context
+def cli(ctx, **kw):
+  ctx.obj = dict(kw)
+
+@cli.command()
+@click.pass_context
+def p4a_recipes(ctx):                                           # {{{1
+  cwd, old = Path("."), []
+  for p in cwd.iterdir():
+    if not p.is_dir(): continue
+    init, orig = p / "__init__.py", p / ("_" + p.name + ".py")
+    if init.exists():
+      v, u    = version_url(init)
+      ov, ou  = version_url(orig) if orig.exists() else (None, None)
+      lv      = latest_version(p.name, u or ou)
+      if ctx.obj["verbose"]:
+        click.echo("==> {}".format(p.name))
+        if lv: click.echo("  latest  version : {}".format(lv))
+        if v : click.echo("  current version : {}".format(v))
+        if ov: click.echo("  orig    version : {}".format(ov))
+        if u : click.echo("              url : {}".format(u))
+        if ou: click.echo("  orig        url : {}".format(ou))
+      if not (v or ov) or not lv:
+        msg = click.style("[CHECK FAILED]", fg = "yellow")
+        click.echo("{} {}".format(msg, p.name))
+      elif (v or ov) != lv:
+        old.append((p.name, v or ov, lv))
+  for x, cur, new in old:
+    msg = click.style("[OUTDATED]", fg = "red")
+    click.echo("{} {} = {} < {}".format(msg, x, cur, new))
+                                                                # }}}1
+
+@cli.command("_doctest", hidden = True)
+@click.pass_context
+def doctest(ctx):
+  import doctest
+  if doctest.testmod()[0]: ctx.exit(1)
+
+if __name__ == "__main__":
+  cli()
+
+# vim: set tw=70 sw=2 sts=2 et fdm=marker :
