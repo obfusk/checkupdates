@@ -28,6 +28,7 @@ import click, requests
 
 GH_API      = "https://api.github.com"
 GH_RELEASES = GH_API + "/repos/{}/{}/releases"
+GH_TAGS     = GH_API + "/repos/{}/{}/tags"
 PYPI_JSON   = "https://pypi.org/pypi/{}/json"
 
 GH_RX       = r"https://github\.com/([^/]+)/([^/]+)/"
@@ -44,6 +45,11 @@ LATEST      = dict(
                      r"releaselog.*Version\s*([\d.]+)"),
 )
 LATEST["hostpython3"] = LATEST["python3"]
+
+PYPI_RENAME = dict(
+  dateutil  = "python-dateutil",
+  mysqldb   = "MySQL-python",
+)
 
 def get(url, hdrs = {}):
   (resp := requests.get(url, headers = hdrs)).raise_for_status()
@@ -69,23 +75,34 @@ def version_url(p):
   return v, u
 
 def latest_version(name, url = None):                           # {{{1
-  if name in LATEST:
-    v             = None
-    fst, url, rx  = LATEST[name]
-    for line in get(url).iter_lines():
-      if m := re.search(rx, line.decode()):
-        v = m[1]
-        if fst: break
-    return v
-  elif url:
-    if m := re.match(GH_RX, url):
-      for r in get_paginated(gh_get, GH_RELEASES.format(m[1], m[2])):
-        if not r["draft"] and not r["prerelease"]:
-          v = r["tag_name"]
-          return v[1:] if v.startswith("v") else v
-      return None
-    if m := re.match(PYPI_RX, url):
-      return get(PYPI_JSON.format(name)).json()["info"]["version"]
+  try:
+    if name in LATEST:
+      v             = None
+      fst, url, rx  = LATEST[name]
+      for line in get(url).iter_lines():
+        if m := re.search(rx, line.decode()):
+          v = m[1]
+          if fst: break
+      return v
+    elif url:
+      if m := re.match(GH_RX, url):
+        for r in get_paginated(gh_get, GH_RELEASES.format(m[1], m[2])):
+          if not r["draft"] and not r["prerelease"]:
+            v = r["tag_name"]
+            return v[1:] if v.startswith("v") else v
+        for r in get_paginated(gh_get, GH_TAGS.format(m[1], m[2])):
+          t = r["name"]
+          if t.startswith(name + "-"): t = t[len(name)+1:]
+          if re.fullmatch(r"v?[\d.]+", t):
+            return t[1:] if t.startswith("v") else t
+        return None
+      if m := re.match(PYPI_RX, url):
+        name = PYPI_RENAME.get(name, name)
+        return get(PYPI_JSON.format(name)).json()["info"]["version"]
+  except requests.exceptions.HTTPError as e:
+    msg = click.style("[HTTP ERROR]", fg = "red")
+    click.echo("{} {} {}".format(msg, name, e), file = sys.stderr)
+    return None
   return None
                                                                 # }}}1
 
@@ -98,8 +115,8 @@ def cli(ctx, **kw):
 @cli.command()
 @click.pass_context
 def p4a_recipes(ctx):                                           # {{{1
-  cwd, old = Path("."), []
-  for p in cwd.iterdir():
+  cwd, old, fail, ok = Path("."), [], [], 0
+  for p in sorted(cwd.iterdir(), key = lambda p: p.name):
     if not p.is_dir(): continue
     init, orig = p / "__init__.py", p / ("_" + p.name + ".py")
     if init.exists():
@@ -114,13 +131,21 @@ def p4a_recipes(ctx):                                           # {{{1
         if u : click.echo("              url : {}".format(u))
         if ou: click.echo("  orig        url : {}".format(ou))
       if not (v or ov) or not lv:
-        msg = click.style("[CHECK FAILED]", fg = "yellow")
-        click.echo("{} {}".format(msg, p.name))
+        fail.append(p.name)
       elif (v or ov) != lv:
         old.append((p.name, v or ov, lv))
-  for x, cur, new in old:
-    msg = click.style("[OUTDATED]", fg = "red")
-    click.echo("{} {} = {} < {}".format(msg, x, cur, new))
+      else:
+        ok += 1
+  for name in fail:
+    msg = click.style("[CHECK FAILED]", fg = "red")
+    click.echo("{} {}".format(msg, name))
+  for name, cur, new in old:
+    msg = click.style("[POSSIBLY OUTDATED]", fg = "yellow")
+    click.echo("{} {} = {} -> {}".format(msg, name, cur, new))
+  click.echo("{} ok, {} outdated, {} failed"
+             .format(ok, len(old), len(fail)))
+  if fail: ctx.exit(2)
+  if old : ctx.exit(1)
                                                                 # }}}1
 
 @cli.command("_doctest", hidden = True)
