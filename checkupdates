@@ -35,12 +35,22 @@ GH_RX       = r"https://github\.com/([^/]+)/([^/]+)/"
 PYPI_RX     = r"https://pypi\.python\.org/"
 
 LATEST      = dict(
+  boost     = (True , "https://www.boost.org/",
+                     r"history/version.*Version\s*([\d.]+)"),
+  curl      = (False, "https://curl.haxx.se/download/",
+                     r"curl-([\d.]+).zip"),
   openssl   = (True , "https://www.openssl.org/source/",
                      r"openssl-(1[\d.]+[a-z]?).tar.gz"),
   libpcre   = (False, "https://ftp.pcre.org/pub/pcre/",
                      r"pcre-([\d.]+)\.zip"),
+  libxml2   = (False, "http://xmlsoft.org/sources/",          # HTTP!
+                     r"libxml2-([\d.]+).tar.gz"),
+  libxslt   = (False, "http://xmlsoft.org/sources/",          # HTTP!
+                     r"libxslt-([\d.]+).tar.gz"),
   python3   = (True , "https://www.python.org/downloads/",
                      r"https://www\.python\.org/ftp/python/([\d.]+)/"),
+  sdl2      = (False, "https://www.libsdl.org/release/",
+                     r"SDL2-([\d.]+).tar.gz"),
   sqlite3   = (True , "https://www.sqlite.org/index.html",
                      r"releaselog.*Version\s*([\d.]+)"),
 )
@@ -49,7 +59,10 @@ LATEST["hostpython3"] = LATEST["python3"]
 PYPI_RENAME = dict(
   dateutil  = "python-dateutil",
   mysqldb   = "MySQL-python",
+  zope      = "zope.interface",
 )
+
+P4A_SKIP    = "android brokenrecipe genericndkbuild pil".split()
 
 def get(url, hdrs = {}):
   (resp := requests.get(url, headers = hdrs)).raise_for_status()
@@ -67,14 +80,15 @@ def get_paginated(get_f, url, **kw):
     for x in resp.json(): yield x
 
 def version_url(p):
-  v, u = None, None
+  v, u, h = None, None, None
   with p.open() as f:
     for line in f:
       if m := re.search(r"""version\s*=\s*['"]v?(\S+)['"]""", line): v = m[1]
-      if m := re.search(r"""url\s*=\s*['"](\S+)['"]"""    , line): u = m[1]
-  return v, u
+      if m := re.search(r"""url\s*=\s*['"](\S+)['"]"""      , line): u = m[1]
+      if m := re.search(r"""md5sum\s*=\s*['"](\S+)['"]"""   , line): h = m[1]
+  return v, u, h
 
-def latest_version(name, url = None):                           # {{{1
+def latest_version(name, url = None, cur = None):               # {{{1
   try:
     if name in LATEST:
       v             = None
@@ -95,6 +109,7 @@ def latest_version(name, url = None):                           # {{{1
           if t.startswith(name + "-"): t = t[len(name)+1:]
           if re.fullmatch(r"v?[\d.]+", t):
             return t[1:] if t.startswith("v") else t
+        if cur in "master main develop".split(): return cur
         return None
       if m := re.match(PYPI_RX, url):
         name = PYPI_RENAME.get(name, name)
@@ -117,29 +132,36 @@ def cli(ctx, **kw):
 def p4a_recipes(ctx):                                           # {{{1
   cwd, old, fail, ok = Path("."), [], [], 0
   for p in sorted(cwd.iterdir(), key = lambda p: p.name):
-    if not p.is_dir(): continue
+    if not p.is_dir() or p.name in P4A_SKIP: continue
     init, orig = p / "__init__.py", p / ("_" + p.name + ".py")
     if init.exists():
-      v, u    = version_url(init)
-      ov, ou  = version_url(orig) if orig.exists() else (None, None)
-      lv      = latest_version(p.name, u or ou)
+      iv, iu, ih  = version_url(init)
+      ov, ou, oh  = version_url(orig) if orig.exists() else [None]*3
+      cv, cu, ch  = iu or ou, iv or ov, ih or oh
+      lv          = latest_version(p.name, cv, cu)
       if ctx.obj["verbose"]:
         click.echo("==> {}".format(p.name))
         if lv: click.echo("  latest  version : {}".format(lv))
-        if v : click.echo("  current version : {}".format(v))
+        if iv: click.echo("  init    version : {}".format(cv))
         if ov: click.echo("  orig    version : {}".format(ov))
-        if u : click.echo("              url : {}".format(u))
+        if iu: click.echo("  init        url : {}".format(cu))
         if ou: click.echo("  orig        url : {}".format(ou))
-      if not (v or ov) or not lv:
+        if ih: click.echo("  init     md5sum : {}".format(ch))
+        if oh: click.echo("  orig     md5sum : {}".format(oh))
+      if cu and "http:" in cu:
+        msg = click.style("[USES HTTP]", fg = "red")
+        click.echo("{} {}".format(msg, p.name))
+      if not (cv and lv):
         fail.append(p.name)
-      elif (v or ov) != lv:
-        old.append((p.name, v or ov, lv))
+      elif cv != lv:
+        old.append((p.name, cv, lv, ch))
       else:
         ok += 1
   for name in fail:
     msg = click.style("[CHECK FAILED]", fg = "red")
     click.echo("{} {}".format(msg, name))
-  for name, cur, new in old:
+  for name, cur, new, md5 in old:
+    if md5: cur += " (" + md5 + ")"
     msg = click.style("[POSSIBLY OUTDATED]", fg = "yellow")
     click.echo("{} {} = {} -> {}".format(msg, name, cur, new))
   click.echo("{} ok, {} outdated, {} failed"
