@@ -79,13 +79,14 @@ def get_paginated(get_f, url, **kw):
     url   = resp.links.get("next", {}).get("url")
     for x in resp.json(): yield x
 
-def version_url(p):
+def version_url_hash(p):
   v, u, h = None, None, None
-  with p.open() as f:
-    for line in f:
-      if m := re.search(r"""version\s*=\s*['"]v?(\S+)['"]""", line): v = m[1]
-      if m := re.search(r"""url\s*=\s*['"](\S+)['"]"""      , line): u = m[1]
-      if m := re.search(r"""md5sum\s*=\s*['"](\S+)['"]"""   , line): h = m[1]
+  if p.exists():
+    with p.open() as f:
+      for line in f:
+        if m := re.search(r"""version\s*=\s*['"]v?(\S+)['"]""", line): v = m[1]
+        if m := re.search(r"""url\s*=\s*['"](\S+)['"]"""      , line): u = m[1]
+        if m := re.search(r"""md5sum\s*=\s*['"](\S+)['"]"""   , line): h = m[1]
   return v, u, h
 
 def latest_version(name, url = None, cur = None):               # {{{1
@@ -135,18 +136,18 @@ def p4a_recipes(ctx):                                           # {{{1
     if not p.is_dir() or p.name in P4A_SKIP: continue
     init, orig = p / "__init__.py", p / ("_" + p.name + ".py")
     if init.exists():
-      iv, iu, ih  = version_url(init)
-      ov, ou, oh  = version_url(orig) if orig.exists() else [None]*3
-      cv, cu, ch  = iu or ou, iv or ov, ih or oh
-      lv          = latest_version(p.name, cv, cu)
+      iv, iu, ih  = version_url_hash(init)
+      ov, ou, oh  = version_url_hash(orig)
+      cv, cu, ch  = iv or ov, iu or ou, ih or oh
+      lv          = latest_version(p.name, cu, cv)
       if ctx.obj["verbose"]:
         click.echo("==> {}".format(p.name))
         if lv: click.echo("  latest  version : {}".format(lv))
-        if iv: click.echo("  init    version : {}".format(cv))
+        if iv: click.echo("  init    version : {}".format(iv))
         if ov: click.echo("  orig    version : {}".format(ov))
-        if iu: click.echo("  init        url : {}".format(cu))
+        if iu: click.echo("  init        url : {}".format(iu))
         if ou: click.echo("  orig        url : {}".format(ou))
-        if ih: click.echo("  init     md5sum : {}".format(ch))
+        if ih: click.echo("  init     md5sum : {}".format(ih))
         if oh: click.echo("  orig     md5sum : {}".format(oh))
       if cu and "http:" in cu:
         msg = click.style("[USES HTTP]", fg = "red")
