@@ -5,7 +5,7 @@
 #
 # File        : checkupdates
 # Maintainer  : Felix C. Stegerman <flx@obfusk.net>
-# Date        : 2020-08-10
+# Date        : 2020-08-11
 #
 # Copyright   : Copyright (C) 2020  Felix C. Stegerman
 # Version     : v0.0.1
@@ -32,7 +32,7 @@ GH_TAGS     = GH_API + "/repos/{}/{}/tags"
 PYPI_JSON   = "https://pypi.org/pypi/{}/json"
 
 GH_RX       = r"https://github\.com/([^/]+)/([^/]+)/"
-PYPI_RX     = r"https://pypi\.python\.org/"
+PYPI_RX     = r"https?://pypi\.python\.org/"
 
 LATEST      = dict(
   boost     = (True , "https://www.boost.org/",
