@@ -5,7 +5,7 @@
 #
 # File        : checkupdates
 # Maintainer  : Felix C. Stegerman <flx@obfusk.net>
-# Date        : 2020-08-11
+# Date        : 2021-01-04
 #
 # Copyright   : Copyright (C) 2020  Felix C. Stegerman
 # Version     : v0.0.1
@@ -17,7 +17,7 @@
 r"""
 
 >>> latest_version("python3")
-'3.8.5'
+'3.9.1'
 
 """                                                             # }}}1
 
@@ -81,6 +81,7 @@ def get_paginated(get_f, url, **kw):
     url   = resp.links.get("next", {}).get("url")
     for x in resp.json(): yield x
 
+# FIXME: use other hashes (in url) (too)
 def version_url_hash(p):
   v, u, h = None, None, None
   if p.exists():
@@ -91,7 +92,7 @@ def version_url_hash(p):
         if m := re.search(r"""md5sum\s*=\s*['"](\S+)['"]"""   , line): h = m[1]
   return v, u, h
 
-def latest_version(name, url = None, cur = None):               # {{{1
+def latest_version(name, url = None, cur = None, pypi = False): # {{{1
   try:
     if name in LATEST:
       v             = None
@@ -115,9 +116,9 @@ def latest_version(name, url = None, cur = None):               # {{{1
           return t[1:] if t.startswith("v") else t
         if cur in BRANCHES: return cur
         return None
-      if m := re.match(PYPI_RX, url):
-        name = PYPI_RENAME.get(name, name)
-        return get(PYPI_JSON.format(name)).json()["info"]["version"]
+    if pypi or (url and re.match(PYPI_RX, url)):
+      name = PYPI_RENAME.get(name, name)
+      return get(PYPI_JSON.format(name)).json()["info"]["version"]
   except requests.exceptions.HTTPError as e:
     msg = click.style("[HTTP ERROR]", fg = "red")
     click.echo("{} {} {}".format(msg, name, e), file = sys.stderr)
@@ -161,18 +162,75 @@ def p4a_recipes(ctx):                                           # {{{1
         old.append((p.name, cv, lv, ch))
       else:
         ok += 1
+  p4a_report(ctx, old, fail, ok)
+                                                                # }}}1
+
+@cli.command()
+@click.option("-r", "--p4a-recipes", multiple = True,
+  type = click.Path(exists = True, file_okay = False),
+  help = "p4a recipe dir(s)")
+@click.pass_context
+def buildozer_spec(ctx, p4a_recipes):                           # {{{1
+  for p in "p4a-recipes .p4a/pythonforandroid/recipes".split():
+    if Path(p).exists():
+      if ctx.obj["verbose"]:
+        click.echo("[detected p4a recipes in {}]".format(p))
+      p4a_recipes += (p,)
+  reqs = None
+  with open("buildozer.spec") as f:
+    for line in f:
+      if m := re.match(r"requirements\s*=(.*)", line):
+        reqs = m[1].strip()
+        while not reqs or reqs.endswith(","):
+          reqs += next(f).strip()
+        reqs = reqs.split(",")
+        break
+  if not reqs:
+    click.echo("no requirements found", file = sys.stderr)
+    ctx.exit(2)
+  old, fail, ok = [], [], 0
+  for req in sorted(reqs):
+    if "==" in req:
+      name, sv = req.split("==")
+      if sv.startswith("v"): sv = sv[1:]
+    else:
+      name, sv = req, None
+    if name in P4A_SKIP: continue
+    rv, ru = None, None
+    for p in map(Path, p4a_recipes):
+      init = p / name / "__init__.py"
+      if init.exists():
+        v, u, h = version_url_hash(init)
+        rv, ru  = rv or v, ru or u
+    sv = sv or rv
+    lv = latest_version(name, ru, sv, True)
+    if ctx.obj["verbose"]:
+      click.echo("==> {}".format(name))
+      if lv: click.echo("  latest  version : {}".format(lv))
+      if sv: click.echo("  spec    version : {}".format(sv))
+      if rv: click.echo("  recipe  version : {}".format(rv))
+      if ru: click.echo("  recipe      url : {}".format(ru))
+    if not (sv and lv):
+      fail.append(name)
+    elif sv != lv:
+      old.append((name, sv, lv, None))
+    else:
+      ok += 1
+  p4a_report(ctx, old, fail, ok)
+                                                                 # }}}1
+
+def p4a_report(ctx, old, fail, ok):
   for name in fail:
     msg = click.style("[CHECK FAILED]", fg = "red")
     click.echo("{} {}".format(msg, name))
   for name, cur, new, md5 in old:
-    if md5: cur += " (" + md5 + ")"
+    if md5: cur += " (" + md5 + ")"                           #   FIXME
     msg = click.style("[POSSIBLY OUTDATED]", fg = "yellow")
     click.echo("{} {} = {} -> {}".format(msg, name, cur, new))
   click.echo("{} ok, {} outdated, {} failed"
              .format(ok, len(old), len(fail)))
   if fail: ctx.exit(2)
   if old : ctx.exit(1)
-                                                                # }}}1
 
 @cli.command("_doctest", hidden = True)
 @click.pass_context
