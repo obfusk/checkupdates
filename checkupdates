@@ -5,7 +5,7 @@
 #
 # File        : checkupdates
 # Maintainer  : Felix C. Stegerman <flx@obfusk.net>
-# Date        : 2021-01-04
+# Date        : 2021-06-13
 #
 # Copyright   : Copyright (C) 2020  Felix C. Stegerman
 # Version     : v0.0.1
@@ -17,7 +17,7 @@
 r"""
 
 >>> latest_version("python3")
-'3.9.1'
+'3.9.5'
 
 """                                                             # }}}1
 
@@ -162,7 +162,7 @@ def p4a_recipes(ctx):                                           # {{{1
         old.append((p.name, cv, lv, ch))
       else:
         ok += 1
-  p4a_report(ctx, old, fail, ok)
+  report(ctx, old, fail, ok)
                                                                 # }}}1
 
 @cli.command()
@@ -216,10 +216,51 @@ def buildozer_spec(ctx, p4a_recipes):                           # {{{1
       old.append((name, sv, lv, None))
     else:
       ok += 1
-  p4a_report(ctx, old, fail, ok)
+  report(ctx, old, fail, ok)
                                                                  # }}}1
 
-def p4a_report(ctx, old, fail, ok):
+@cli.command()
+@click.pass_context
+def requirements_txt(ctx):
+  old, fail, ok = [], [], 0
+  with open("requirements.txt") as f:
+    reqs = [ line.strip().split("==") for line in f if "==" in line ]
+  for name, cv in sorted(reqs):
+    lv = latest_version(name, None, cv, True)
+    if ctx.obj["verbose"]:
+      click.echo("==> {}".format(name))
+      if lv: click.echo("  latest  version : {}".format(lv))
+      if cv: click.echo("  current version : {}".format(cv))
+    if not (cv and lv):
+      fail.append(name)
+    elif cv != lv:
+      old.append((name, cv, lv, None))
+    else:
+      ok += 1
+  report(ctx, old, fail, ok)
+
+# FIXME: support pypy
+@cli.command()
+@click.pass_context
+def runtime_txt(ctx):
+  old, fail, ok = [], [], 0
+  name = "python3"
+  with open("runtime.txt") as f:
+    cv = f.readline().strip().split("-")[1]
+  lv = latest_version(name, None, cv)
+  if ctx.obj["verbose"]:
+    click.echo("==> {}".format(name))
+    if lv: click.echo("  latest  version : {}".format(lv))
+    if cv: click.echo("  current version : {}".format(cv))
+  if not (cv and lv):
+    fail.append(name)
+  elif cv != lv:
+    old.append((name, cv, lv, None))
+  else:
+    ok += 1
+  report(ctx, old, fail, ok)
+
+def report(ctx, old, fail, ok):
   for name in fail:
     msg = click.style("[CHECK FAILED]", fg = "red")
     click.echo("{} {}".format(msg, name))
